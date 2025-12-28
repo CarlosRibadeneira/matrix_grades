@@ -1,0 +1,21 @@
+{
+  "set_a": {
+    "name": "Set A",
+    "weight": 0.70,
+    "projects": ["Project 1", "Project 2", "Project 3", "Project 4"]
+  },
+  "set_b": {
+    "name": "Set B",
+    "weight": 0.30,
+    "projects": ["Project 1", "Project 2"]
+  },
+  "qualitative_grades": [
+    {"label": "Consistent Impact", "min": 90, "max": 100},
+    {"label": "Developing Impact", "min": 80, "max": 89},
+    {"label": "Emerging", "min": 70, "max": 79},
+    {"label": "Needs Support", "min": 60, "max": 69},
+    {"label": "Not Yet Meeting", "min": 0, "max": 59}
+  ],
+  "trimesters": ["Trimester 1", "Trimester 2", "Trimester 3"],
+  "output_file": "grades.xlsx"
+}
