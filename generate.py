@@ -69,6 +69,24 @@ def build_qualitative_formula(cell: str, grades: list[dict]) -> str:
     return formula
 
 
+def get_final_grade_column(config: dict) -> int:
+    """Calculate which column number contains the Final Grade."""
+    # Column structure:
+    # 1: Student Name
+    # 2 to 1+len(set_a): Set A projects
+    # next: Avg A
+    # next len(set_b) cols: Set B projects
+    # next: Avg B
+    # next: Final Grade
+    # next: Qualitative
+    
+    set_a_count = len(config["set_a"]["projects"])
+    set_b_count = len(config["set_b"]["projects"])
+    
+    col_final = 1 + set_a_count + 1 + set_b_count + 1 + 1
+    return col_final
+
+
 def create_grade_sheet(ws, students: list[str], config: dict):
     """Create a grade sheet with headers, student rows, and formulas."""
     
@@ -275,6 +293,142 @@ def create_grade_sheet(ws, students: list[str], config: dict):
     ws.column_dimensions[col_letter(col_qual)].width = 20
 
 
+def create_total_sheet(ws, students: list[str], config: dict):
+    """Create a Total sheet that summarizes all trimesters with year average."""
+    
+    trimesters = config["trimesters"]
+    qualitative_grades = config.get("qualitative_grades", [])
+    
+    # Get the column positions for Final Grade and Qualitative in trimester sheets
+    col_final_in_trimester = get_final_grade_column(config)
+    col_qual_in_trimester = col_final_in_trimester + 1
+    final_col_letter = col_letter(col_final_in_trimester)
+    qual_col_letter = col_letter(col_qual_in_trimester)
+    
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    trimester_fill = PatternFill(start_color="9BC2E6", end_color="9BC2E6", fill_type="solid")
+    qual_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    year_avg_fill = PatternFill(start_color="F4B183", end_color="F4B183", fill_type="solid")
+    year_qual_fill = PatternFill(start_color="A9D08E", end_color="A9D08E", fill_type="solid")
+    center_align = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin")
+    )
+    
+    # Column structure:
+    # 1: Student Name
+    # For each trimester: Grade, Qualitative
+    # Then: Year Average, Year Qualitative
+    
+    col = 1
+    col_student = col
+    col += 1
+    
+    # Track trimester column positions
+    trimester_cols = []
+    for _ in trimesters:
+        trimester_cols.append({"grade": col, "qual": col + 1})
+        col += 2
+    
+    col_year_avg = col
+    col += 1
+    col_year_qual = col
+    
+    # --- Row 1: Headers ---
+    row = 1
+    
+    ws.cell(row=row, column=col_student, value="Student Name")
+    ws.cell(row=row, column=col_student).font = header_font
+    ws.cell(row=row, column=col_student).fill = header_fill
+    ws.cell(row=row, column=col_student).alignment = center_align
+    ws.cell(row=row, column=col_student).border = thin_border
+    
+    for i, trimester in enumerate(trimesters):
+        # Grade column
+        ws.cell(row=row, column=trimester_cols[i]["grade"], value=f"{trimester} Grade")
+        ws.cell(row=row, column=trimester_cols[i]["grade"]).font = Font(bold=True)
+        ws.cell(row=row, column=trimester_cols[i]["grade"]).fill = trimester_fill
+        ws.cell(row=row, column=trimester_cols[i]["grade"]).alignment = center_align
+        ws.cell(row=row, column=trimester_cols[i]["grade"]).border = thin_border
+        
+        # Qualitative column
+        ws.cell(row=row, column=trimester_cols[i]["qual"], value=f"{trimester} Qual")
+        ws.cell(row=row, column=trimester_cols[i]["qual"]).font = Font(bold=True)
+        ws.cell(row=row, column=trimester_cols[i]["qual"]).fill = qual_fill
+        ws.cell(row=row, column=trimester_cols[i]["qual"]).alignment = center_align
+        ws.cell(row=row, column=trimester_cols[i]["qual"]).border = thin_border
+    
+    ws.cell(row=row, column=col_year_avg, value="Year Average")
+    ws.cell(row=row, column=col_year_avg).font = Font(bold=True)
+    ws.cell(row=row, column=col_year_avg).fill = year_avg_fill
+    ws.cell(row=row, column=col_year_avg).alignment = center_align
+    ws.cell(row=row, column=col_year_avg).border = thin_border
+    
+    ws.cell(row=row, column=col_year_qual, value="Year Qualitative")
+    ws.cell(row=row, column=col_year_qual).font = Font(bold=True)
+    ws.cell(row=row, column=col_year_qual).fill = year_qual_fill
+    ws.cell(row=row, column=col_year_qual).alignment = center_align
+    ws.cell(row=row, column=col_year_qual).border = thin_border
+    
+    # --- Student rows with formulas ---
+    for student_idx, student_name in enumerate(students):
+        row = 2 + student_idx
+        data_row_in_trimester = 3 + student_idx  # Row where student data is in trimester sheets
+        
+        # Student name
+        ws.cell(row=row, column=col_student, value=student_name)
+        ws.cell(row=row, column=col_student).border = thin_border
+        
+        # Trimester grades and qualitative (referenced from trimester sheets)
+        grade_cells = []
+        for i, trimester in enumerate(trimesters):
+            # Grade formula - reference from trimester sheet
+            grade_ref = f"='{trimester}'!{final_col_letter}{data_row_in_trimester}"
+            ws.cell(row=row, column=trimester_cols[i]["grade"], value=grade_ref)
+            ws.cell(row=row, column=trimester_cols[i]["grade"]).alignment = center_align
+            ws.cell(row=row, column=trimester_cols[i]["grade"]).fill = trimester_fill
+            ws.cell(row=row, column=trimester_cols[i]["grade"]).border = thin_border
+            
+            # Track grade cell for year average calculation
+            grade_cells.append(f"{col_letter(trimester_cols[i]['grade'])}{row}")
+            
+            # Qualitative formula - reference from trimester sheet
+            qual_ref = f"='{trimester}'!{qual_col_letter}{data_row_in_trimester}"
+            ws.cell(row=row, column=trimester_cols[i]["qual"], value=qual_ref)
+            ws.cell(row=row, column=trimester_cols[i]["qual"]).alignment = center_align
+            ws.cell(row=row, column=trimester_cols[i]["qual"]).fill = qual_fill
+            ws.cell(row=row, column=trimester_cols[i]["qual"]).border = thin_border
+        
+        # Year Average formula (average of all trimester grades)
+        grade_cells_str = ",".join(grade_cells)
+        year_avg_formula = f"=IF(COUNT({grade_cells_str})>0,AVERAGE({grade_cells_str}),\"\")"
+        ws.cell(row=row, column=col_year_avg, value=year_avg_formula)
+        ws.cell(row=row, column=col_year_avg).alignment = center_align
+        ws.cell(row=row, column=col_year_avg).fill = year_avg_fill
+        ws.cell(row=row, column=col_year_avg).border = thin_border
+        
+        # Year Qualitative formula
+        year_avg_cell = f"{col_letter(col_year_avg)}{row}"
+        year_qual_formula = build_qualitative_formula(year_avg_cell, qualitative_grades)
+        ws.cell(row=row, column=col_year_qual, value=year_qual_formula)
+        ws.cell(row=row, column=col_year_qual).alignment = center_align
+        ws.cell(row=row, column=col_year_qual).fill = year_qual_fill
+        ws.cell(row=row, column=col_year_qual).border = thin_border
+    
+    # Adjust column widths
+    ws.column_dimensions[col_letter(col_student)].width = 25
+    for i in range(len(trimesters)):
+        ws.column_dimensions[col_letter(trimester_cols[i]["grade"])].width = 14
+        ws.column_dimensions[col_letter(trimester_cols[i]["qual"])].width = 18
+    ws.column_dimensions[col_letter(col_year_avg)].width = 14
+    ws.column_dimensions[col_letter(col_year_qual)].width = 18
+
+
 def generate_workbook(config: dict, students: list[str]) -> Workbook:
     """Generate the Excel workbook with all trimester sheets."""
     wb = Workbook()
@@ -287,15 +441,19 @@ def generate_workbook(config: dict, students: list[str]) -> Workbook:
         ws = wb.create_sheet(title=trimester)
         create_grade_sheet(ws, students, config)
     
+    # Create the Total sheet
+    ws_total = wb.create_sheet(title="Total")
+    create_total_sheet(ws_total, students, config)
+    
     # Create a legend/instructions sheet
     ws_info = wb.create_sheet(title="Instructions", index=0)
     ws_info["A1"] = "Student Grading Matrix"
     ws_info["A1"].font = Font(bold=True, size=16)
     ws_info["A3"] = "How to use:"
     ws_info["A3"].font = Font(bold=True)
-    ws_info["A4"] = "1. Go to each Trimester tab"
-    ws_info["A5"] = "2. Enter grades (0-100) in the project columns"
-    ws_info["A6"] = "3. Averages, Final Grade, and Qualitative calculate automatically"
+    ws_info["A4"] = "1. Go to each Trimester tab and enter grades (0-100)"
+    ws_info["A5"] = "2. Averages, Final Grade, and Qualitative calculate automatically"
+    ws_info["A6"] = "3. The Total tab shows all trimester summaries and year average"
     ws_info["A8"] = "Configuration:"
     ws_info["A8"].font = Font(bold=True)
     
@@ -374,6 +532,7 @@ def main():
     if qualitative_grades:
         print(f"   Qualitative Ranges: {len(qualitative_grades)} levels")
     
+    print(f"   Tabs: {', '.join(config['trimesters'])} + Total")
     print(f"\n🎉 Open {output_file} and start entering grades!")
 
 
