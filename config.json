@@ -1,4 +1,9 @@
 {
+  "scale": {
+    "min": 0,
+    "max": 100,
+    "decimal_places": 1
+  },
   "set_a": {
     "name": "Set A",
     "weight": 0.70,
