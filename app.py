@@ -10,6 +10,8 @@ import pandas as pd
 import json
 import io
 from typing import Any
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
 from core import (
     get_default_config,
@@ -80,6 +82,55 @@ def create_template_df(students: list[str], config: dict) -> pd.DataFrame:
     for col in columns[1:]:
         data[col] = [""] * len(students)
     return pd.DataFrame(data)
+
+
+def create_excel_template(students: list[str], config: dict) -> bytes:
+    """Create an Excel template file with proper formatting."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Grades"
+    
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    center_align = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin")
+    )
+    
+    # Get columns
+    columns = get_grade_columns(config)
+    
+    # Write headers
+    for col_idx, col_name in enumerate(columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+    
+    # Write student names
+    for row_idx, student in enumerate(students, 2):
+        ws.cell(row=row_idx, column=1, value=student).border = thin_border
+        # Add empty cells with borders for grade columns
+        for col_idx in range(2, len(columns) + 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value="")
+            cell.border = thin_border
+            cell.alignment = center_align
+    
+    # Adjust column widths
+    ws.column_dimensions['A'].width = 25  # Student Name
+    for col_idx in range(2, len(columns) + 1):
+        ws.column_dimensions[chr(64 + col_idx)].width = 15
+    
+    # Save to bytes
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def calculate_row_stats(row: pd.Series, config: dict) -> dict:
@@ -263,28 +314,31 @@ def render_sidebar():
         for trimester in config["trimesters"]:
             st.sidebar.subheader(f"📁 {trimester}")
             
-            # Download template
-            template_df = create_template_df(students, config)
-            csv_template = template_df.to_csv(index=False)
+            # Download Excel template
+            excel_template = create_excel_template(students, config)
             st.sidebar.download_button(
                 f"📥 Download {trimester} template",
-                data=csv_template,
-                file_name=f"{trimester.replace(' ', '_')}_template.csv",
-                mime="text/csv",
+                data=excel_template,
+                file_name=f"{trimester.replace(' ', '_')}_template.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key=f"template_{trimester}"
             )
             
-            # Upload grades
+            # Upload grades (accept both CSV and Excel)
             grades_file = st.sidebar.file_uploader(
                 f"Upload {trimester} grades",
-                type=["csv"],
+                type=["csv", "xlsx"],
                 key=f"grades_{trimester}",
                 label_visibility="collapsed"
             )
             
             if grades_file is not None:
                 try:
-                    grades_df = pd.read_csv(grades_file)
+                    # Read CSV or Excel based on file extension
+                    if grades_file.name.endswith('.xlsx'):
+                        grades_df = pd.read_excel(grades_file)
+                    else:
+                        grades_df = pd.read_csv(grades_file)
                     st.session_state.grades[trimester] = grades_df
                     st.sidebar.success(f"✓ {trimester} grades loaded")
                 except Exception as e:
