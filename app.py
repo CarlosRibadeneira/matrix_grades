@@ -25,7 +25,7 @@ st.set_page_config(
     page_title="Grading Matrix Generator",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS for better styling
@@ -38,19 +38,16 @@ st.markdown("""
         padding: 10px 20px;
         border-radius: 4px;
     }
-    .validation-warning {
-        background-color: #fff3cd;
-        border: 1px solid #ffc107;
-        padding: 10px;
-        border-radius: 5px;
-        margin: 10px 0;
+    .step-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
     }
-    .validation-error {
-        background-color: #f8d7da;
-        border: 1px solid #dc3545;
-        padding: 10px;
-        border-radius: 5px;
-        margin: 10px 0;
+    .step-complete {
+        color: #28a745;
+    }
+    .step-pending {
+        color: #6c757d;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -60,6 +57,9 @@ def init_session_state():
     """Initialize session state with default values."""
     if "config" not in st.session_state:
         st.session_state.config = get_default_config()
+    
+    if "config_loaded" not in st.session_state:
+        st.session_state.config_loaded = False
     
     if "students" not in st.session_state:
         st.session_state.students = []
@@ -223,65 +223,146 @@ def build_chart_data(grades: dict, config: dict, selected_columns: list[str]) ->
     return pd.DataFrame(chart_data)
 
 
-def render_sidebar():
-    """Render the configuration sidebar with upload/download only."""
-    st.sidebar.header("⚙️ Configuration")
+def get_workflow_status() -> dict:
+    """Get the completion status of each workflow step."""
+    config = st.session_state.config
+    students = st.session_state.students
+    grades = st.session_state.grades
     
-    st.sidebar.markdown("Upload a JSON config file to set up your grading matrix.")
+    # Check grades status per trimester
+    grades_status = {}
+    for trimester in config.get("trimesters", []):
+        grades_status[trimester] = trimester in grades and grades[trimester] is not None and not grades[trimester].empty
+    
+    return {
+        "config": st.session_state.config_loaded,
+        "students": len(students) > 0,
+        "grades": grades_status,
+        "grades_any": any(grades_status.values()),
+        "charts": len(st.session_state.chart_config.get("columns", [])) > 0
+    }
+
+
+def render_sidebar():
+    """Render a minimal sidebar for quick config access."""
+    st.sidebar.header("Quick Access")
     
     # Config upload
     uploaded_config = st.sidebar.file_uploader(
         "Upload config JSON",
         type=["json"],
-        key="config_uploader",
-        help="Upload a JSON file with your grading configuration"
+        key="sidebar_config_uploader",
+        help="Quick upload for config file"
     )
     
     if uploaded_config is not None:
         try:
             user_config = json.load(uploaded_config)
             st.session_state.config = merge_config(user_config)
-            st.sidebar.success("✓ Config loaded successfully!")
+            st.session_state.config_loaded = True
+            st.sidebar.success("✓ Config loaded!")
             st.rerun()
         except json.JSONDecodeError:
             st.sidebar.error("Invalid JSON file")
     
-    st.sidebar.divider()
-    
     # Config download
     config_json = config_to_json(st.session_state.config)
     st.sidebar.download_button(
-        "📥 Download Current Config",
+        "📥 Download Config",
         data=config_json,
         file_name="grading_config.json",
-        mime="application/json",
-        help="Download the current configuration as a JSON file"
+        mime="application/json"
     )
+
+
+def render_step1_config():
+    """Render Step 1: Configuration."""
+    status = get_workflow_status()
     
-    st.sidebar.divider()
+    if status["config"]:
+        st.header("Step 1: Configuration ✓")
+    else:
+        st.header("Step 1: Configuration")
     
-    # Show current config summary (read-only)
-    st.sidebar.subheader("Current Settings")
-    config = st.session_state.config
+    st.markdown("Upload a JSON configuration file or use the default settings.")
     
-    st.sidebar.markdown(f"""
+    col1, col2 = st.columns([1, 2])
+    
+    with col1:
+        uploaded_config = st.file_uploader(
+            "Upload config JSON",
+            type=["json"],
+            key="config_uploader",
+            help="Upload a JSON file with your grading configuration"
+        )
+        
+        if uploaded_config is not None:
+            try:
+                user_config = json.load(uploaded_config)
+                st.session_state.config = merge_config(user_config)
+                st.session_state.config_loaded = True
+                st.success("✓ Config loaded successfully!")
+                st.rerun()
+            except json.JSONDecodeError:
+                st.error("Invalid JSON file")
+        
+        # Download current config
+        config_json = config_to_json(st.session_state.config)
+        st.download_button(
+            "📥 Download Current Config",
+            data=config_json,
+            file_name="grading_config.json",
+            mime="application/json"
+        )
+    
+    with col2:
+        st.subheader("Current Configuration")
+        config = st.session_state.config
+        
+        # Display config summary in columns
+        c1, c2, c3 = st.columns(3)
+        
+        with c1:
+            st.markdown(f"""
 **Scale:** {config['scale']['min']} - {config['scale']['max']}
 
 **{config['set_a']['name']}** ({int(config['set_a']['weight'] * 100)}%)
-- {len(config['set_a']['projects'])} projects
+""")
+            for proj in config['set_a']['projects']:
+                st.markdown(f"- {proj}")
+        
+        with c2:
+            st.markdown(f"""
+**Decimal Places:** {config['scale']['decimal_places']}
 
 **{config['set_b']['name']}** ({int(config['set_b']['weight'] * 100)}%)
-- {len(config['set_b']['projects'])} projects
-
-**Trimesters:** {len(config['trimesters'])}
-
-**Qualitative Grades:** {len(config.get('qualitative_grades', []))}
 """)
+            for proj in config['set_b']['projects']:
+                st.markdown(f"- {proj}")
+        
+        with c3:
+            st.markdown("**Trimesters:**")
+            for t in config['trimesters']:
+                st.markdown(f"- {t}")
+            
+            st.markdown(f"\n**Qualitative Grades:** {len(config.get('qualitative_grades', []))}")
+    
+    if status["config"]:
+        st.success("✓ Configuration loaded - proceed to Step 2")
+    else:
+        st.info("Using default configuration. Upload a custom config or proceed with defaults.")
 
 
-def render_students_section():
-    """Render the students input section."""
-    st.header("👥 Students")
+def render_step2_students():
+    """Render Step 2: Students."""
+    status = get_workflow_status()
+    
+    if status["students"]:
+        st.header(f"Step 2: Students ✓ ({len(st.session_state.students)} loaded)")
+    else:
+        st.header("Step 2: Students")
+    
+    st.markdown("Add your student list by pasting names or uploading a file.")
     
     tab1, tab2 = st.tabs(["📝 Paste Names", "📁 Upload File"])
     
@@ -307,7 +388,6 @@ def render_students_section():
         if uploaded_file is not None:
             content = uploaded_file.read().decode("utf-8")
             if uploaded_file.name.endswith(".csv"):
-                # Try to parse as CSV
                 try:
                     df = pd.read_csv(io.StringIO(content))
                     if len(df.columns) >= 1:
@@ -320,7 +400,7 @@ def render_students_section():
     # Display student count and validation
     students = st.session_state.students
     if students:
-        st.success(f"✓ {len(students)} students loaded")
+        st.success(f"✓ {len(students)} students loaded - proceed to Step 3")
         
         # Validate students
         issues = validate_students(students)
@@ -336,25 +416,46 @@ def render_students_section():
             if len(students) > 10:
                 st.write(f"... and {len(students) - 10} more")
     else:
-        st.info("Enter student names above to begin")
+        st.info("Enter student names above to continue")
 
 
-def render_grade_entry():
-    """Render the grade entry section with trimester tabs."""
-    st.header("📝 Grade Entry")
-    
+def render_step3_grades():
+    """Render Step 3: Grade Entry."""
     config = st.session_state.config
     students = st.session_state.students
+    status = get_workflow_status()
+    
+    # Build header with status
+    grades_complete = sum(1 for v in status["grades"].values() if v)
+    grades_total = len(status["grades"])
+    
+    if grades_complete == grades_total and grades_total > 0:
+        st.header(f"Step 3: Grade Entry ✓ ({grades_complete}/{grades_total} trimesters)")
+    elif grades_complete > 0:
+        st.header(f"Step 3: Grade Entry ({grades_complete}/{grades_total} trimesters)")
+    else:
+        st.header("Step 3: Grade Entry")
     
     if not students:
-        st.warning("Please add students first")
+        st.warning("⚠️ Complete Step 2 first: Add students")
         return
     
     if not config["trimesters"]:
-        st.warning("Please upload a config file with trimesters defined")
+        st.warning("⚠️ No trimesters defined in configuration")
         return
     
-    st.info("💡 **Workflow:** Download the CSV template, fill in grades in Excel/Google Sheets, then upload the completed CSV.")
+    st.markdown("Download the CSV template, fill in grades in Excel/Google Sheets, then upload the completed CSV.")
+    
+    # Show trimester status
+    status_cols = st.columns(len(config["trimesters"]))
+    for i, trimester in enumerate(config["trimesters"]):
+        with status_cols[i]:
+            if status["grades"].get(trimester, False):
+                st.success(f"✓ {trimester}")
+            else:
+                st.info(f"○ {trimester}")
+    
+    st.divider()
     
     # Create tabs for each trimester
     trimester_tabs = st.tabs(config["trimesters"])
@@ -373,7 +474,7 @@ def render_trimester_grade_entry(trimester: str):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("📥 Step 1: Download Template")
+        st.subheader("📥 Download Template")
         template_df = create_empty_grades_df(students, config)
         csv_template = template_df.to_csv(index=False)
         st.download_button(
@@ -387,7 +488,7 @@ def render_trimester_grade_entry(trimester: str):
         st.caption("Fill in grades in Excel or Google Sheets")
     
     with col2:
-        st.subheader("📤 Step 2: Upload Filled CSV")
+        st.subheader("📤 Upload Filled CSV")
         uploaded_grades = st.file_uploader(
             "Upload completed grades CSV",
             type=["csv"],
@@ -436,21 +537,27 @@ def render_trimester_grade_entry(trimester: str):
         st.info("Upload a CSV file to see grade preview")
 
 
-def render_charts_section():
-    """Render the charts configuration and preview section."""
-    st.header("📊 Charts")
-    
+def render_step4_charts():
+    """Render Step 4: Charts (Optional)."""
     config = st.session_state.config
     grades = st.session_state.grades
     students = st.session_state.students
+    status = get_workflow_status()
+    
+    if status["charts"]:
+        st.header("Step 4: Charts (Optional) ✓")
+    else:
+        st.header("Step 4: Charts (Optional)")
     
     if not students:
-        st.info("Add students to configure charts")
+        st.info("Complete Step 2 first: Add students")
         return
     
-    if not grades:
-        st.info("Upload grades to configure charts")
+    if not status["grades_any"]:
+        st.info("Complete Step 3 first: Upload grades for at least one trimester")
         return
+    
+    st.markdown("Select columns to visualize. Charts will be included in the generated Excel file.")
     
     # Get available columns for charting
     available_columns = get_available_chart_columns(config)
@@ -458,9 +565,8 @@ def render_charts_section():
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("Select Columns to Chart")
         selected_columns = st.multiselect(
-            "Choose which columns to include in the chart",
+            "Select columns to include in chart",
             options=available_columns,
             default=st.session_state.chart_config.get("columns", []),
             key="chart_columns_select",
@@ -469,18 +575,16 @@ def render_charts_section():
         st.session_state.chart_config["columns"] = selected_columns
     
     with col2:
-        st.subheader("Chart Type")
         chart_type = st.selectbox(
-            "Select chart type",
+            "Chart type",
             options=["Bar Chart", "Line Chart", "Area Chart"],
             key="chart_type_select"
         )
         st.session_state.chart_config["chart_type"] = chart_type.lower().replace(" ", "_")
     
-    st.divider()
-    
     # Preview chart
     if selected_columns:
+        st.divider()
         st.subheader("📈 Chart Preview")
         
         chart_df = build_chart_data(grades, config, selected_columns)
@@ -505,74 +609,20 @@ def render_charts_section():
                 st.warning("No data available for the selected columns")
         else:
             st.warning("No data available to chart. Make sure grades are uploaded.")
-    else:
-        st.info("Select columns above to preview the chart")
 
 
-def render_summary():
-    """Render the summary section."""
-    st.header("📈 Summary")
-    
-    config = st.session_state.config
-    students = st.session_state.students
-    grades = st.session_state.grades
-    
-    if not students:
-        st.info("Add students to see summary")
-        return
-    
-    if not grades:
-        st.info("Upload grades to see summary")
-        return
-    
-    # Build summary table
-    summary_data = []
-    for student in students:
-        row_data = {"Student Name": student}
-        
-        trimester_grades = []
-        for trimester in config["trimesters"]:
-            if trimester in grades:
-                df = grades[trimester]
-                student_row = df[df["Student Name"] == student]
-                if not student_row.empty:
-                    stats = calculate_row_stats(student_row.iloc[0], config)
-                    row_data[f"{trimester} Grade"] = stats["Final Grade"]
-                    row_data[f"{trimester} Qual"] = stats["Qualitative"]
-                    if stats["Final Grade"] != "":
-                        trimester_grades.append(float(stats["Final Grade"]))
-        
-        # Calculate year average
-        if trimester_grades:
-            year_avg = sum(trimester_grades) / len(trimester_grades)
-            row_data["Year Average"] = round(year_avg, config["scale"]["decimal_places"])
-            
-            # Year qualitative
-            for grade in sorted(config.get("qualitative_grades", []), key=lambda x: x["min"], reverse=True):
-                if year_avg >= grade["min"]:
-                    row_data["Year Qualitative"] = grade["label"]
-                    break
-        else:
-            row_data["Year Average"] = ""
-            row_data["Year Qualitative"] = ""
-        
-        summary_data.append(row_data)
-    
-    summary_df = pd.DataFrame(summary_data)
-    st.dataframe(summary_df, hide_index=True, use_container_width=True)
-
-
-def render_generate_section():
-    """Render the generate Excel section."""
-    st.header("📥 Generate Excel")
-    
+def render_step5_generate():
+    """Render Step 5: Generate Excel."""
     config = st.session_state.config
     students = st.session_state.students
     grades = st.session_state.grades
     chart_config = st.session_state.chart_config
+    status = get_workflow_status()
+    
+    st.header("Step 5: Generate Excel")
     
     # Validation summary
-    st.subheader("Validation")
+    st.subheader("Validation Summary")
     
     config_issues = validate_config(config)
     student_issues = validate_students(students)
@@ -582,27 +632,55 @@ def render_generate_section():
     errors = [i for i in all_issues if i["type"] == "error"]
     warnings = [i for i in all_issues if i["type"] == "warning"]
     
-    if errors:
-        for error in errors:
-            st.error(f"❌ {error['message']}")
+    # Show workflow status
+    col1, col2 = st.columns(2)
     
-    if warnings:
-        for warning in warnings:
-            st.warning(f"⚠️ {warning['message']}")
+    with col1:
+        st.markdown("**Workflow Status:**")
+        if status["config"]:
+            st.markdown("✓ Step 1: Configuration loaded")
+        else:
+            st.markdown("○ Step 1: Using default configuration")
+        
+        if status["students"]:
+            st.markdown(f"✓ Step 2: {len(students)} students loaded")
+        else:
+            st.markdown("❌ Step 2: No students loaded")
+        
+        grades_complete = sum(1 for v in status["grades"].values() if v)
+        grades_total = len(status["grades"])
+        if grades_complete == grades_total and grades_total > 0:
+            st.markdown(f"✓ Step 3: All {grades_total} trimesters complete")
+        elif grades_complete > 0:
+            st.markdown(f"○ Step 3: {grades_complete}/{grades_total} trimesters complete")
+        else:
+            st.markdown("❌ Step 3: No grades uploaded")
+        
+        if status["charts"]:
+            st.markdown(f"✓ Step 4: Chart configured ({len(chart_config['columns'])} columns)")
+        else:
+            st.markdown("○ Step 4: No chart configured (optional)")
     
-    if not errors and not warnings:
-        st.success("✓ All validations passed")
-    
-    # Show chart info
-    if chart_config.get("columns"):
-        st.info(f"📊 Chart will be included with columns: {', '.join(chart_config['columns'])}")
+    with col2:
+        if errors:
+            st.markdown("**Errors:**")
+            for error in errors:
+                st.error(f"❌ {error['message']}")
+        
+        if warnings:
+            st.markdown("**Warnings:**")
+            for warning in warnings:
+                st.warning(f"⚠️ {warning['message']}")
+        
+        if not errors and not warnings:
+            st.success("✓ All validations passed")
     
     can_generate = len(errors) == 0 and len(students) > 0
     
     st.divider()
     
     # Generate button
-    if st.button("🚀 Generate Excel", disabled=not can_generate, type="primary"):
+    if st.button("🚀 Generate Excel", disabled=not can_generate, type="primary", use_container_width=True):
         with st.spinner("Generating Excel file..."):
             # Prepare grades data
             grades_by_trimester = {}
@@ -635,14 +713,15 @@ def render_generate_section():
                 data=buffer,
                 file_name=config.get("output_file", "grades.xlsx"),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
+                type="primary",
+                use_container_width=True
             )
             
-            st.success("Excel file generated successfully!")
+            st.success("✓ Excel file generated successfully!")
     
     if not can_generate:
         if not students:
-            st.info("Add students to enable generation")
+            st.info("Complete Step 2 to enable generation")
         elif errors:
             st.info("Fix errors above to enable generation")
 
@@ -652,29 +731,32 @@ def main():
     init_session_state()
     
     st.title("📊 Grading Matrix Generator")
-    st.markdown("Create flexible grading matrices with customizable scales, weights, and qualitative grades.")
     
-    # Sidebar configuration
+    # Sidebar for quick access
     render_sidebar()
     
-    # Main content
-    render_students_section()
+    # Step 1: Configuration
+    render_step1_config()
     
     st.divider()
     
-    render_grade_entry()
+    # Step 2: Students
+    render_step2_students()
     
     st.divider()
     
-    render_charts_section()
+    # Step 3: Grade Entry
+    render_step3_grades()
     
     st.divider()
     
-    render_summary()
+    # Step 4: Charts
+    render_step4_charts()
     
     st.divider()
     
-    render_generate_section()
+    # Step 5: Generate
+    render_step5_generate()
 
 
 if __name__ == "__main__":
