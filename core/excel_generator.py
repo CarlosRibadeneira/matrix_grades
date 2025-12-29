@@ -5,6 +5,7 @@ import pandas as pd
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.chart import BarChart, LineChart, AreaChart, Reference
 
 
 def col_letter(col_num: int) -> str:
@@ -415,10 +416,97 @@ def create_total_sheet(
     ws.column_dimensions[col_letter(col_year_qual)].width = 18
 
 
+def create_chart_sheet(
+    ws,
+    chart_data: pd.DataFrame,
+    chart_config: dict[str, Any]
+):
+    """
+    Create a sheet with chart data and embedded chart.
+    
+    Args:
+        ws: Worksheet to populate
+        chart_data: DataFrame with Student column and data columns
+        chart_config: Dict with 'columns' and 'chart_type' keys
+    """
+    if chart_data is None or chart_data.empty:
+        ws["A1"] = "No chart data available"
+        return
+    
+    # Styles
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    center_align = Alignment(horizontal="center", vertical="center")
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin")
+    )
+    
+    # Write headers
+    for col_idx, col_name in enumerate(chart_data.columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        cell.border = thin_border
+    
+    # Write data
+    for row_idx, row in enumerate(chart_data.itertuples(index=False), 2):
+        for col_idx, value in enumerate(row, 1):
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.alignment = center_align
+            cell.border = thin_border
+    
+    # Adjust column widths
+    for col_idx, col_name in enumerate(chart_data.columns, 1):
+        ws.column_dimensions[col_letter(col_idx)].width = max(15, len(str(col_name)) + 2)
+    
+    # Create chart
+    chart_type = chart_config.get("chart_type", "bar_chart")
+    
+    if chart_type == "line_chart":
+        chart = LineChart()
+    elif chart_type == "area_chart":
+        chart = AreaChart()
+    else:
+        chart = BarChart()
+    
+    chart.title = "Grade Comparison"
+    chart.style = 10
+    chart.x_axis.title = "Students"
+    chart.y_axis.title = "Grade"
+    
+    # Data reference (skip first column which is Student names)
+    num_rows = len(chart_data) + 1  # +1 for header
+    num_cols = len(chart_data.columns)
+    
+    if num_cols > 1:
+        # Data series
+        data = Reference(ws, min_col=2, min_row=1, max_col=num_cols, max_row=num_rows)
+        # Categories (student names)
+        cats = Reference(ws, min_col=1, min_row=2, max_row=num_rows)
+        
+        chart.add_data(data, titles_from_data=True)
+        chart.set_categories(cats)
+        chart.shape = 4
+        
+        # Chart size
+        chart.width = 20
+        chart.height = 12
+        
+        # Place chart below the data
+        chart_position = f"A{num_rows + 3}"
+        ws.add_chart(chart, chart_position)
+
+
 def generate_workbook(
     config: dict[str, Any],
     students: list[str],
-    grades_by_trimester: dict[str, pd.DataFrame] | None = None
+    grades_by_trimester: dict[str, pd.DataFrame] | None = None,
+    chart_data: pd.DataFrame | None = None,
+    chart_config: dict[str, Any] | None = None
 ) -> Workbook:
     """
     Generate the Excel workbook with all trimester sheets.
@@ -427,6 +515,8 @@ def generate_workbook(
         config: Configuration dictionary
         students: List of student names
         grades_by_trimester: Optional dict mapping trimester name to DataFrame with grades
+        chart_data: Optional DataFrame with chart data
+        chart_config: Optional dict with chart configuration
         
     Returns:
         openpyxl Workbook object
@@ -447,6 +537,11 @@ def generate_workbook(
     # Create the Total sheet
     ws_total = wb.create_sheet(title="Total")
     create_total_sheet(ws_total, students, config)
+    
+    # Create chart sheet if chart data is provided
+    if chart_data is not None and not chart_data.empty and chart_config:
+        ws_chart = wb.create_sheet(title="Charts")
+        create_chart_sheet(ws_chart, chart_data, chart_config)
     
     # Create instructions sheet
     ws_info = wb.create_sheet(title="Instructions", index=0)

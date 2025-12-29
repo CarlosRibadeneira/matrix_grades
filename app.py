@@ -66,6 +66,12 @@ def init_session_state():
     
     if "grades" not in st.session_state:
         st.session_state.grades = {}
+    
+    if "chart_config" not in st.session_state:
+        st.session_state.chart_config = {
+            "columns": [],
+            "chart_type": "bar"
+        }
 
 
 def config_to_json(config: dict) -> str:
@@ -154,6 +160,67 @@ def calculate_row_stats(row: pd.Series, config: dict) -> dict:
         "Final Grade": round(final_grade, config["scale"]["decimal_places"]) if final_grade is not None else "",
         "Qualitative": qualitative
     }
+
+
+def get_available_chart_columns(config: dict) -> list[str]:
+    """Get list of columns available for charting."""
+    columns = []
+    # Individual project columns
+    for proj in config["set_a"]["projects"]:
+        columns.append(f"A_{proj}")
+    for proj in config["set_b"]["projects"]:
+        columns.append(f"B_{proj}")
+    # Calculated columns
+    columns.extend(["Avg A", "Avg B", "Final Grade"])
+    return columns
+
+
+def build_chart_data(grades: dict, config: dict, selected_columns: list[str]) -> pd.DataFrame:
+    """Build a DataFrame for charting from grades data."""
+    students = st.session_state.students
+    if not students or not grades:
+        return pd.DataFrame()
+    
+    chart_data = {"Student": students}
+    
+    # For each trimester, calculate stats and extract selected columns
+    for trimester in config["trimesters"]:
+        if trimester not in grades:
+            continue
+        
+        df = grades[trimester]
+        
+        for col in selected_columns:
+            col_key = f"{trimester} - {col}"
+            values = []
+            
+            for student in students:
+                student_row = df[df["Student Name"] == student]
+                if student_row.empty:
+                    values.append(None)
+                    continue
+                
+                row = student_row.iloc[0]
+                
+                # Check if it's a calculated column
+                if col in ["Avg A", "Avg B", "Final Grade"]:
+                    stats = calculate_row_stats(row, config)
+                    val = stats.get(col, "")
+                    values.append(float(val) if val != "" else None)
+                else:
+                    # Direct column from data
+                    if col in row.index:
+                        val = row[col]
+                        try:
+                            values.append(float(val) if pd.notna(val) and val != "" else None)
+                        except (ValueError, TypeError):
+                            values.append(None)
+                    else:
+                        values.append(None)
+            
+            chart_data[col_key] = values
+    
+    return pd.DataFrame(chart_data)
 
 
 def render_sidebar():
@@ -414,10 +481,7 @@ def render_grade_entry():
         st.warning("Please configure trimesters in the sidebar")
         return
     
-    # Initialize grades for each trimester if not exists
-    for trimester in config["trimesters"]:
-        if trimester not in st.session_state.grades:
-            st.session_state.grades[trimester] = create_empty_grades_df(students, config)
+    st.info("💡 **Workflow:** Download the CSV template, fill in grades in Excel/Google Sheets, then upload the completed CSV.")
     
     # Create tabs for each trimester
     trimester_tabs = st.tabs(config["trimesters"])
@@ -428,141 +492,148 @@ def render_grade_entry():
 
 
 def render_trimester_grade_entry(trimester: str):
-    """Render grade entry for a single trimester."""
+    """Render grade entry for a single trimester (CSV-only workflow)."""
     config = st.session_state.config
     students = st.session_state.students
     
-    # CSV template download
-    col1, col2 = st.columns([1, 3])
+    # CSV template download and upload
+    col1, col2 = st.columns(2)
     
     with col1:
+        st.subheader("📥 Step 1: Download Template")
         template_df = create_empty_grades_df(students, config)
         csv_template = template_df.to_csv(index=False)
         st.download_button(
-            "📥 Download CSV Template",
+            "Download CSV Template",
             data=csv_template,
             file_name=f"{trimester.replace(' ', '_')}_template.csv",
             mime="text/csv",
-            key=f"template_{trimester}"
+            key=f"template_{trimester}",
+            type="primary"
         )
+        st.caption("Fill in grades in Excel or Google Sheets")
     
     with col2:
+        st.subheader("📤 Step 2: Upload Filled CSV")
         uploaded_grades = st.file_uploader(
-            "Upload grades CSV",
+            "Upload completed grades CSV",
             type=["csv"],
-            key=f"grades_upload_{trimester}"
+            key=f"grades_upload_{trimester}",
+            label_visibility="collapsed"
         )
         
         if uploaded_grades is not None:
             try:
                 imported_df = pd.read_csv(uploaded_grades)
                 st.session_state.grades[trimester] = imported_df
-                st.success("Grades imported!")
+                st.success("✓ Grades imported successfully!")
             except Exception as e:
                 st.error(f"Error importing CSV: {e}")
     
     st.divider()
     
-    # Get current grades DataFrame
-    current_df = st.session_state.grades.get(trimester)
-    if current_df is None:
-        current_df = create_empty_grades_df(students, config)
+    # Show read-only preview of grades if available
+    if trimester in st.session_state.grades:
+        df = st.session_state.grades[trimester]
+        if df is not None and not df.empty:
+            st.subheader("📊 Grades Preview")
+            
+            # Calculate and show preview with calculated columns
+            preview_data = []
+            for idx, row in df.iterrows():
+                stats = calculate_row_stats(row, config)
+                row_dict = {"Student Name": row.get("Student Name", "")}
+                # Add original grade columns
+                for col in df.columns:
+                    if col != "Student Name":
+                        row_dict[col] = row[col]
+                # Add calculated columns
+                row_dict.update(stats)
+                preview_data.append(row_dict)
+            
+            preview_df = pd.DataFrame(preview_data)
+            st.dataframe(preview_df, hide_index=True, use_container_width=True)
+            
+            # Validate grades
+            issues = validate_grades(df, config)
+            if issues:
+                scale = config["scale"]
+                st.warning(f"⚠️ {len(issues)} grade(s) outside valid range ({scale['min']}-{scale['max']})")
+    else:
+        st.info("Upload a CSV file to see grade preview")
+
+
+def render_charts_section():
+    """Render the charts configuration and preview section."""
+    st.header("📊 Charts")
     
-    # Ensure DataFrame has correct columns based on current config
-    expected_columns = get_grade_columns(config)
+    config = st.session_state.config
+    grades = st.session_state.grades
+    students = st.session_state.students
     
-    # Check if columns match, if not recreate
-    if list(current_df.columns) != expected_columns:
-        # Try to preserve existing data
-        new_df = create_empty_grades_df(students, config)
-        for col in current_df.columns:
-            if col in new_df.columns:
-                new_df[col] = current_df[col].values[:len(students)] if len(current_df) >= len(students) else current_df[col].tolist() + [None] * (len(students) - len(current_df))
-        current_df = new_df
+    if not students:
+        st.info("Add students to configure charts")
+        return
     
-    # Also check if student list changed
-    if len(current_df) != len(students) or list(current_df["Student Name"]) != students:
-        new_df = create_empty_grades_df(students, config)
-        # Try to match existing grades by student name
-        for idx, student in enumerate(students):
-            if student in current_df["Student Name"].values:
-                old_row = current_df[current_df["Student Name"] == student].iloc[0]
-                for col in new_df.columns:
-                    if col in old_row.index and col != "Student Name":
-                        new_df.at[idx, col] = old_row[col]
-        current_df = new_df
+    if not grades:
+        st.info("Upload grades to configure charts")
+        return
     
-    # Configure column types for the data editor
-    column_config = {
-        "Student Name": st.column_config.TextColumn(
-            "Student Name",
-            disabled=True,
-            width="medium"
+    # Get available columns for charting
+    available_columns = get_available_chart_columns(config)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        st.subheader("Select Columns to Chart")
+        selected_columns = st.multiselect(
+            "Choose which columns to include in the chart",
+            options=available_columns,
+            default=st.session_state.chart_config.get("columns", []),
+            key="chart_columns_select",
+            help="Select one or more columns to visualize"
         )
-    }
+        st.session_state.chart_config["columns"] = selected_columns
     
-    scale = config["scale"]
-    for proj in config["set_a"]["projects"]:
-        col_name = f"A_{proj}"
-        column_config[col_name] = st.column_config.NumberColumn(
-            f"{config['set_a']['name']}: {proj}",
-            min_value=scale["min"],
-            max_value=scale["max"],
-            step=0.1 if scale["decimal_places"] > 0 else 1,
-            width="small"
+    with col2:
+        st.subheader("Chart Type")
+        chart_type = st.selectbox(
+            "Select chart type",
+            options=["Bar Chart", "Line Chart", "Area Chart"],
+            key="chart_type_select"
         )
+        st.session_state.chart_config["chart_type"] = chart_type.lower().replace(" ", "_")
     
-    for proj in config["set_b"]["projects"]:
-        col_name = f"B_{proj}"
-        column_config[col_name] = st.column_config.NumberColumn(
-            f"{config['set_b']['name']}: {proj}",
-            min_value=scale["min"],
-            max_value=scale["max"],
-            step=0.1 if scale["decimal_places"] > 0 else 1,
-            width="small"
-        )
+    st.divider()
     
-    # Editable data grid
-    edited_df = st.data_editor(
-        current_df,
-        column_config=column_config,
-        hide_index=True,
-        key=f"grades_editor_{trimester}",
-        use_container_width=True
-    )
-    
-    # Update session state
-    st.session_state.grades[trimester] = edited_df
-    
-    # Validate grades
-    issues = validate_grades(edited_df, config)
-    if issues:
-        st.warning(f"⚠️ {len(issues)} grade(s) outside valid range ({scale['min']}-{scale['max']})")
-    
-    # Show calculated columns preview
-    st.subheader("📊 Calculated Preview")
-    
-    preview_data = []
-    for idx, row in edited_df.iterrows():
-        stats = calculate_row_stats(row, config)
-        preview_data.append({
-            "Student Name": row["Student Name"],
-            **stats
-        })
-    
-    preview_df = pd.DataFrame(preview_data)
-    st.dataframe(
-        preview_df,
-        column_config={
-            "Student Name": st.column_config.TextColumn("Student Name", width="medium"),
-            "Avg A": st.column_config.NumberColumn(f"Avg {config['set_a']['name']}", width="small"),
-            "Avg B": st.column_config.NumberColumn(f"Avg {config['set_b']['name']}", width="small"),
-            "Final Grade": st.column_config.NumberColumn("Final Grade", width="small"),
-            "Qualitative": st.column_config.TextColumn("Qualitative", width="medium"),
-        },
-        hide_index=True,
-        use_container_width=True
-    )
+    # Preview chart
+    if selected_columns:
+        st.subheader("📈 Chart Preview")
+        
+        chart_df = build_chart_data(grades, config, selected_columns)
+        
+        if not chart_df.empty and len(chart_df.columns) > 1:
+            # Set student as index for better chart display
+            chart_df_display = chart_df.set_index("Student")
+            
+            # Remove columns with all NaN
+            chart_df_display = chart_df_display.dropna(axis=1, how='all')
+            
+            if not chart_df_display.empty:
+                if chart_type == "Bar Chart":
+                    st.bar_chart(chart_df_display)
+                elif chart_type == "Line Chart":
+                    st.line_chart(chart_df_display)
+                else:  # Area Chart
+                    st.area_chart(chart_df_display)
+                
+                st.caption("This chart will be included in the generated Excel file.")
+            else:
+                st.warning("No data available for the selected columns")
+        else:
+            st.warning("No data available to chart. Make sure grades are uploaded.")
+    else:
+        st.info("Select columns above to preview the chart")
 
 
 def render_summary():
@@ -578,7 +649,7 @@ def render_summary():
         return
     
     if not grades:
-        st.info("Enter grades to see summary")
+        st.info("Upload grades to see summary")
         return
     
     # Build summary table
@@ -625,6 +696,7 @@ def render_generate_section():
     config = st.session_state.config
     students = st.session_state.students
     grades = st.session_state.grades
+    chart_config = st.session_state.chart_config
     
     # Validation summary
     st.subheader("Validation")
@@ -648,6 +720,10 @@ def render_generate_section():
     if not errors and not warnings:
         st.success("✓ All validations passed")
     
+    # Show chart info
+    if chart_config.get("columns"):
+        st.info(f"📊 Chart will be included with columns: {', '.join(chart_config['columns'])}")
+    
     can_generate = len(errors) == 0 and len(students) > 0
     
     st.divider()
@@ -661,8 +737,19 @@ def render_generate_section():
                 if df is not None and not df.empty:
                     grades_by_trimester[trimester] = df
             
+            # Build chart data if columns selected
+            chart_data = None
+            if chart_config.get("columns"):
+                chart_data = build_chart_data(grades, config, chart_config["columns"])
+            
             # Generate workbook
-            wb = generate_workbook(config, students, grades_by_trimester)
+            wb = generate_workbook(
+                config, 
+                students, 
+                grades_by_trimester,
+                chart_data=chart_data,
+                chart_config=chart_config
+            )
             
             # Save to bytes buffer
             buffer = io.BytesIO()
@@ -706,6 +793,10 @@ def main():
     
     st.divider()
     
+    render_charts_section()
+    
+    st.divider()
+    
     render_summary()
     
     st.divider()
@@ -715,4 +806,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
