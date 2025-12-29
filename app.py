@@ -224,186 +224,59 @@ def build_chart_data(grades: dict, config: dict, selected_columns: list[str]) ->
 
 
 def render_sidebar():
-    """Render the configuration sidebar."""
+    """Render the configuration sidebar with upload/download only."""
     st.sidebar.header("⚙️ Configuration")
     
-    # Config import/export
-    st.sidebar.subheader("Import/Export Config")
+    st.sidebar.markdown("Upload a JSON config file to set up your grading matrix.")
     
+    # Config upload
     uploaded_config = st.sidebar.file_uploader(
         "Upload config JSON",
         type=["json"],
-        key="config_uploader"
+        key="config_uploader",
+        help="Upload a JSON file with your grading configuration"
     )
     
     if uploaded_config is not None:
         try:
             user_config = json.load(uploaded_config)
             st.session_state.config = merge_config(user_config)
-            st.sidebar.success("Config loaded!")
+            st.sidebar.success("✓ Config loaded successfully!")
             st.rerun()
         except json.JSONDecodeError:
             st.sidebar.error("Invalid JSON file")
     
+    st.sidebar.divider()
+    
+    # Config download
     config_json = config_to_json(st.session_state.config)
     st.sidebar.download_button(
         "📥 Download Current Config",
         data=config_json,
         file_name="grading_config.json",
-        mime="application/json"
+        mime="application/json",
+        help="Download the current configuration as a JSON file"
     )
     
     st.sidebar.divider()
     
-    # Scale settings
-    st.sidebar.subheader("📏 Grade Scale")
+    # Show current config summary (read-only)
+    st.sidebar.subheader("Current Settings")
+    config = st.session_state.config
     
-    col1, col2 = st.sidebar.columns(2)
-    with col1:
-        scale_min = st.number_input(
-            "Min",
-            value=st.session_state.config["scale"]["min"],
-            step=1,
-            key="scale_min"
-        )
-    with col2:
-        scale_max = st.number_input(
-            "Max",
-            value=st.session_state.config["scale"]["max"],
-            step=1,
-            key="scale_max"
-        )
-    
-    decimal_places = st.sidebar.number_input(
-        "Decimal places",
-        min_value=0,
-        max_value=3,
-        value=st.session_state.config["scale"]["decimal_places"],
-        key="decimal_places"
-    )
-    
-    st.session_state.config["scale"] = {
-        "min": scale_min,
-        "max": scale_max,
-        "decimal_places": decimal_places
-    }
-    
-    st.sidebar.divider()
-    
-    # Set A configuration
-    st.sidebar.subheader(f"📘 {st.session_state.config['set_a']['name']}")
-    
-    set_a_name = st.sidebar.text_input(
-        "Set A Name",
-        value=st.session_state.config["set_a"]["name"],
-        key="set_a_name"
-    )
-    
-    set_a_weight = st.sidebar.slider(
-        "Set A Weight (%)",
-        min_value=0,
-        max_value=100,
-        value=int(st.session_state.config["set_a"]["weight"] * 100),
-        key="set_a_weight"
-    )
-    
-    set_a_projects_text = st.sidebar.text_area(
-        "Set A Projects (one per line)",
-        value="\n".join(st.session_state.config["set_a"]["projects"]),
-        height=100,
-        key="set_a_projects"
-    )
-    set_a_projects = [p.strip() for p in set_a_projects_text.split("\n") if p.strip()]
-    
-    st.session_state.config["set_a"] = {
-        "name": set_a_name,
-        "weight": set_a_weight / 100,
-        "projects": set_a_projects
-    }
-    
-    st.sidebar.divider()
-    
-    # Set B configuration
-    st.sidebar.subheader(f"📗 {st.session_state.config['set_b']['name']}")
-    
-    set_b_name = st.sidebar.text_input(
-        "Set B Name",
-        value=st.session_state.config["set_b"]["name"],
-        key="set_b_name"
-    )
-    
-    set_b_weight = st.sidebar.slider(
-        "Set B Weight (%)",
-        min_value=0,
-        max_value=100,
-        value=int(st.session_state.config["set_b"]["weight"] * 100),
-        key="set_b_weight"
-    )
-    
-    set_b_projects_text = st.sidebar.text_area(
-        "Set B Projects (one per line)",
-        value="\n".join(st.session_state.config["set_b"]["projects"]),
-        height=100,
-        key="set_b_projects"
-    )
-    set_b_projects = [p.strip() for p in set_b_projects_text.split("\n") if p.strip()]
-    
-    st.session_state.config["set_b"] = {
-        "name": set_b_name,
-        "weight": set_b_weight / 100,
-        "projects": set_b_projects
-    }
-    
-    # Weight validation
-    total_weight = set_a_weight + set_b_weight
-    if total_weight != 100:
-        st.sidebar.warning(f"⚠️ Weights sum to {total_weight}% (should be 100%)")
-    
-    st.sidebar.divider()
-    
-    # Trimesters
-    st.sidebar.subheader("📅 Trimesters")
-    
-    trimesters_text = st.sidebar.text_area(
-        "Trimesters (one per line)",
-        value="\n".join(st.session_state.config["trimesters"]),
-        height=100,
-        key="trimesters"
-    )
-    trimesters = [t.strip() for t in trimesters_text.split("\n") if t.strip()]
-    st.session_state.config["trimesters"] = trimesters
-    
-    st.sidebar.divider()
-    
-    # Qualitative grades
-    st.sidebar.subheader("🏆 Qualitative Grades")
-    
-    qual_grades = st.session_state.config.get("qualitative_grades", [])
-    
-    # Display as editable dataframe
-    qual_df = pd.DataFrame(qual_grades) if qual_grades else pd.DataFrame(columns=["label", "min", "max"])
-    
-    edited_qual = st.sidebar.data_editor(
-        qual_df,
-        num_rows="dynamic",
-        column_config={
-            "label": st.column_config.TextColumn("Label", width="medium"),
-            "min": st.column_config.NumberColumn("Min", width="small"),
-            "max": st.column_config.NumberColumn("Max", width="small"),
-        },
-        key="qual_grades_editor",
-        hide_index=True
-    )
-    
-    # Update config with edited qualitative grades
-    st.session_state.config["qualitative_grades"] = edited_qual.to_dict("records")
-    
-    # Validate qualitative ranges
-    scale = st.session_state.config["scale"]
-    for grade in st.session_state.config["qualitative_grades"]:
-        if grade.get("min", 0) < scale["min"] or grade.get("max", 100) > scale["max"]:
-            st.sidebar.error(f"⚠️ '{grade.get('label', 'Unknown')}' range is outside scale")
-            break
+    st.sidebar.markdown(f"""
+**Scale:** {config['scale']['min']} - {config['scale']['max']}
+
+**{config['set_a']['name']}** ({int(config['set_a']['weight'] * 100)}%)
+- {len(config['set_a']['projects'])} projects
+
+**{config['set_b']['name']}** ({int(config['set_b']['weight'] * 100)}%)
+- {len(config['set_b']['projects'])} projects
+
+**Trimesters:** {len(config['trimesters'])}
+
+**Qualitative Grades:** {len(config.get('qualitative_grades', []))}
+""")
 
 
 def render_students_section():
@@ -478,7 +351,7 @@ def render_grade_entry():
         return
     
     if not config["trimesters"]:
-        st.warning("Please configure trimesters in the sidebar")
+        st.warning("Please upload a config file with trimesters defined")
         return
     
     st.info("💡 **Workflow:** Download the CSV template, fill in grades in Excel/Google Sheets, then upload the completed CSV.")
